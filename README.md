@@ -37,4 +37,4 @@ optional arguments:
 - [ ] Add support for reading from PDB files.
 - [ ] Add more customization options.
 - [ ] Add support for pulling PDB files from microsoft's symbol servers.
-- [ ] Refractor ugly code.
+- [ ] Refractor code.
