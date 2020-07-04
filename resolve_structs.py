@@ -5,6 +5,7 @@ from collections import deque
 import pyastyle
 import argparse
 from os.path import exists
+from ctypes import *
 
 
 class type_enum(IntEnum):
@@ -770,7 +771,7 @@ def main():
 		struct = open(struct_file, "r").read()
 		
 	conditional_print("[==] Acquired struct!\n", quiet_mode_set)
-	
+ 
 	# Resolve structure offsets
 	conditional_print("[++] Resolving struct offsets and formatting...", quiet_mode_set)
 	returned_struct = resolve_struct(struct, options)[0]
