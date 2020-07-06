@@ -1,12 +1,13 @@
 # from pathlib import Path
 import re
 from enum import IntEnum
-from collections import deque
+from collections import deque, namedtuple
 import pyastyle
 import argparse
+from pprint import pprint
 from os.path import exists
 from ctypes import *
-
+import pymspdb as pdb
 
 class type_enum(IntEnum):
 	"""
@@ -67,7 +68,6 @@ _DRIVER_OBJECT  { CSHORT             Type; // This should be ignored
 # i'm keeping these in here incase I want to use them later.
 # They obviously don't work super well, but they work well enough)
 variable_capture_regex = r"[A-Za-z_]([A-Za-z0-9_]{0,254})$" 
-typedef_capture_regex = r"^typedef[\n ]{1,}([()a-zA-Z0-9_*]+[ \n,]{1,})+[* ]{0,}GetContextThread(.*?)[,;]{1,}"
 union_capture_regex = r"union[ ]{0,}(\[\[[a-zA-Z0-9_]+\]\][ ]{1,}){0,}(\[\[[a-zA-Z0-9_]+\]\]){0,1}[a-zA-Z_]{0,1}[a-zA-Z_0-9]{0,}[ ]{0,}{"
 struct_capture_regex = r"^struct[ ]{1,}[a-zA-Z_]{0,1}[a-zA-Z_0-9]{0,}[ ]{0,}{"
 
@@ -627,7 +627,7 @@ def get_largest_element_in_union(union, options={}):
 			union_struct = middle[current_index:closing_index].strip() + ";"
 
 			type_size = get_largest_element_in_union(union_struct, options) if union_match is not None\
-						else resolve_struct(union_struct, options)[1]
+						else resolve_struct(union_struct, options).len
 			if (type_size > max_element):
 				max_element = type_size
 		else:
@@ -711,11 +711,12 @@ def resolve_struct(struct, options={}):
 		current_string, prev_length = add_length_to_type(prev_length, string, type, options)
 		offsets.append(current_string)
 	
+	StructResolveTuple = namedtuple("Struct", ["struct", "len"])
 	# print(beginning + "\n" + "\n".join(offsets) + end)
-	return beginning + "\n" + "\n".join(offsets) + "\n" + end, prev_length
+	return StructResolveTuple(beginning + "\n" + "\n".join(offsets) + "\n" + end, prev_length)
 	
 	# Generator to loop over headers recursively
-	# current_file_gen = get_current_file_gen(path_to_headers)
+	# current_file_genc = get_current_file_gen(path_to_headers)
 	"""
 	for current_file in current_file_gen:
 		with open(current_file, "r") as header_file:
@@ -724,6 +725,43 @@ def resolve_struct(struct, options={}):
 	# Try to look for struct in winapi pdb
 	"""
 	# print("Begin: ", beginning, "Middle: ", middle, "End: ", end)
+
+
+def stringify_dict(struct_name, pdb_dict):
+	count = 0
+	nl = "\n"
+	tab_format = "\t"
+	return f"struct {struct_name} {{ {nl}{'{}'.format(nl).join(['{} {}// {}'.format(y[1], tab_format, hex(x)) for x,y in pdb_dict.items()])} {nl}}}"
+
+def automatically_resolve_struct(struct_name):
+	struct_dict = pdb.get_structure(struct_name)
+
+	if not struct_dict:
+		print(f" [--] Can't find struct with name {struct_name}... Trying {struct_name.strip('_')}")
+		new_name = struct_name.strip("_")
+		struct_dict = pdb.get_structure(new_name)
+		if not struct_dict:
+			return None
+
+	if len((keys := list(struct_dict.keys()))) == 1:
+		return stringify_dict(keys[0], struct_dict[keys[0]]["struct"])	
+
+	"""
+	print(" [++] Found more than 1 object matching the struct name...")
+	print(" [++] I will be printing them and allows you to select the one you want (or none)")
+	for key, val in struct_dict.items():
+		print(f"Struct: {key}")
+		print("Value: ", end="")
+		pprint(val['struct'], sort_dicts=False)
+		print("")
+	"""
+	# print(" [++] Choose struct (if you don't want any of these, don't write anything): ")
+	choice = input()
+
+	try:
+		return stringify_dict(choice, struct_dict[choice]["struct"])
+	except:
+		return None
 
 
 def main():
@@ -763,6 +801,7 @@ def main():
 	
 	conditional_print("[++] Acquiring desired struct...", quiet_mode_set)
 	
+
 	struct_file = options_dict["if"]
 	struct = default_struct
 	if struct_file is not None:
@@ -774,9 +813,17 @@ def main():
  
 	# Resolve structure offsets
 	conditional_print("[++] Resolving struct offsets and formatting...", quiet_mode_set)
-	returned_struct = resolve_struct(struct, options)[0]
+
+	print("Enter the struct's name: ")
+	struct_name = input()
+	conditional_print(" [++] Attempting to automatically get structure...", quiet_mode_set)
+
+	if (returned_struct := automatically_resolve_struct(struct_name)) is None:
+		# print("IT'S NONE!")
+		returned_struct = resolve_struct(struct, options).struct
 	conditional_print("[==] Finished calculating offsets and formatting.\n(if there were any errors please submit an issue to my github)\n", quiet_mode_set)
 	
+	# print(returned_struct)
 	formatted = pyastyle.format(returned_struct, '--style=allman')
 	line_max_length = lambda lines: max(len(line[:line.find("//")]) for line in lines.split("\n"))
 	formatted = formatted.expandtabs(line_max_length(formatted) + 4)
