@@ -34,7 +34,7 @@ optional arguments:
 - [x] Support basic winapi types.
 - [x] Support 64 bit / 32 bit versions of basic types.
 - [x] Support unicode/ascii versions (basic types).
-- [ ] Add support for reading from PDB files.
-- [ ] Add more customization options.
+- [x] Add support for reading from PDB files.
+- [x] Add more customization options.
 - [ ] Add support for pulling PDB files from microsoft's symbol servers.
 - [ ] Refractor code.
