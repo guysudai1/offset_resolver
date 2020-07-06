@@ -1,6 +1,6 @@
 use std::env;
 use std::fmt::Debug;
-use std::borrow::Cow;
+// use std::borrow::Cow;
 use std::path::Path;
 use std::str;
 use std::fs::File;
@@ -8,8 +8,8 @@ use fallible_iterator::FallibleIterator;
 use pyo3::prelude::*;
 use pyo3::exceptions::*;
 use pyo3::{PyResult};
-use pyo3::types::{PyString, PyList, IntoPyDict, PyDict, PyTuple};
-use pdb::{RawString, TypeIndex, TypeFinder, PrimitiveType};
+use pyo3::types::{PyString, /*PyList, IntoPyDict,*/ PyDict, PyTuple};
+use pdb::{RawString, TypeIndex, TypeFinder/*, PrimitiveType*/};
 // use std::io::{Error, ErrorKind};
 
 #[derive(Debug, PartialEq)]
@@ -86,7 +86,7 @@ fn open_pdb_and_parse<'a>() -> Result<pdb::PDB<'a, File>, PyErr>{
     };
 
     // Open and parse PDB file from file handle
-    let mut pdb = match pdb::PDB::open(file) {
+    let pdb = match pdb::PDB::open(file) {
         Ok(_pdb) => _pdb,
         Err(e) => {
             return Err(Exception::py_err(e.to_string()));
@@ -116,12 +116,12 @@ fn extract_type_string(type_finder: &TypeFinder, field_type: pdb::TypeIndex, mem
         pdb::TypeData::Array(pdb::ArrayType {element_type, indexing_type, dimensions, ..}) => {
             match member_name {
                 Some(member_name_) => (crate::TypeData::Array, 
-                    format!("{} {:?} {} ({});", extract_type_string(type_finder, element_type, None, None).1, 
+                    format!("{} {:?} {} (Index type: {});", extract_type_string(type_finder, element_type, None, None).1, 
                                                     dimensions,
                                                     member_name_,
                                                     extract_type_string(type_finder, indexing_type, None, None).1)),
                 None => (crate::TypeData::Array, 
-                    format!("{} {:?} ({})", extract_type_string(type_finder, element_type, None, None).1, 
+                    format!("{} {:?} (Index type: {})", extract_type_string(type_finder, element_type, None, None).1, 
                                                     dimensions,
                                                     extract_type_string(type_finder, indexing_type, None, None).1))
             }
@@ -132,16 +132,16 @@ fn extract_type_string(type_finder: &TypeFinder, field_type: pdb::TypeIndex, mem
             if position == 0 {
                 match member_name {
                     Some(member_name_) => (crate::TypeData::Bitfield, 
-                        format!("struct {{\n{} ({:#x}) - {:#x} {};\n}}", 
+                        format!("struct {{\n{} ({:#x}) - {}:{:#x} {};\n}}", 
                                             extract_type_string(type_finder, underlying_type, None, None).1,
                                             length, 
-                                            position,
+                                            position, position,
                                             member_name_)),
                     None => (crate::TypeData::Bitfield, 
-                        format!("struct {{\n{} ({:#x}) - {:#x};\n}}", 
+                        format!("struct {{\n{} ({:#x}) - {}:{:#x};\n}}", 
                                             extract_type_string(type_finder, underlying_type, None, None).1,
                                             length, 
-                                            position))
+                                            position, position))
                 }
 
             } else {
@@ -150,14 +150,14 @@ fn extract_type_string(type_finder: &TypeFinder, field_type: pdb::TypeIndex, mem
                     let prev_option_string = &prev_option_string[..(prev_length - 3)];
                     // println!("Prev: {}", prev_option_string.to_string());
                     match member_name {
-                        Some(member_name_) => (crate::TypeData::Bitfield, format!("{}{} ({:#x}) - {:#x} {};\n}}", 
+                        Some(member_name_) => (crate::TypeData::Bitfield, format!("{}{} ({:#x}) - {}:{:#x} {};\n}}", 
                                                         prev_option_string, 
                                                         extract_type_string(type_finder, underlying_type, None, None).1, 
-                                                        length, position, member_name_)),
-                        None => (crate::TypeData::Bitfield, format!("{}{} ({:#x}) - {:#x};\n}}", 
+                                                        length, position, position, member_name_)),
+                        None => (crate::TypeData::Bitfield, format!("{}{} ({:#x}) - {}:{:#x};\n}}", 
                                                         prev_option_string, 
                                                         extract_type_string(type_finder, underlying_type, None, None).1, 
-                                                        length, position))
+                                                        length, position, position))
                     }
 
                 } else {
@@ -169,10 +169,120 @@ fn extract_type_string(type_finder: &TypeFinder, field_type: pdb::TypeIndex, mem
 
            // println!("{}", type_str);
         },
-        type_data =>  {
+        pdb::TypeData::Union(pdb::UnionType{name, ..}) => {
+            let final_union = match member_name {
+                Some(member_name_) => {
+                    format!("union {} {};", name.to_string(), member_name_)
+                },
+                None => format!("union {};", name.to_string())
+            };
+            // println!("{:#?} - {}", , name.to_string());
+            
+            (crate::TypeData::Union,
+                final_union)
+        },
+        pdb::TypeData::Class(pdb::ClassType{name, ..}) => {
+            let final_struct = match member_name {
+                Some(member_name_) => {
+                    format!("struct {} {};", name.to_string(), member_name_)
+                },
+                None => format!("struct {}", name.to_string())
+            };
+            // println!("{:#?} - {}", , name.to_string());
+            
+            (crate::TypeData::Class,
+                final_struct)
+        },
+        pdb::TypeData::Pointer(pdb::PointerType{underlying_type, attributes,..}) => {
+            let mut final_pointer = String::from("");
+            if attributes.is_const() {
+                final_pointer.push_str("const ");
+            }
+            if let Some(member_name) = member_name {
+                let member_name = format!("*{}", member_name);
+                let pointer_type = extract_type_string(type_finder, underlying_type, Some(member_name), None).1;
+                final_pointer.push_str(&pointer_type[..]);
+            } else {
+                let _member_name = String::from("*");
+                let pointer_type = extract_type_string(type_finder, underlying_type, None, None).1;
+                let pointer_type = format!("{}*", pointer_type);
+                final_pointer.push_str(&pointer_type[..]);
+            }
+            // println!("POINTER {}", final_pointer);
+            (crate::TypeData::Pointer,
+                final_pointer)
+        },
+        pdb::TypeData::Modifier(pdb::ModifierType {underlying_type, constant, volatile, unaligned}) => {
+            let mut final_modified = String::from("");
+            if constant {
+                final_modified.push_str("const ");
+            }
+            if volatile {
+                final_modified.push_str("volatile ");
+            }
+            if unaligned {
+                final_modified.push_str("unaligned ");
+            }
+
+            if let Some(member_name) = member_name {
+                let modifier_type = extract_type_string(type_finder, underlying_type, Some(member_name), None).1;
+                final_modified.push_str(&modifier_type[..]);
+            } else {
+                let _member_name = String::from("<unknown>");
+                let modifier_type = extract_type_string(type_finder, underlying_type, None, None).1;
+                let modifier_type = format!("{}", modifier_type);//, member_name);
+                final_modified.push_str(&modifier_type[..]);
+            }
+            // println!("MODIFIER {}", final_modified);
+            (crate::TypeData::Modifier,
+                final_modified)
+        },
+        pdb::TypeData::Procedure(pdb::ProcedureType {return_type, argument_list, ..}) => {
+            let mut final_procedure = String::from("");
+
+            if let Some(return_type) = return_type {
+                let return_type = extract_type_string(type_finder, return_type, None, None).1;
+                final_procedure.push_str(&return_type[..]);
+                final_procedure.push_str(" ");
+            }
+
+            if let Some(member_name) = member_name {
+                let procedure_type = extract_type_string(type_finder, argument_list, Some(member_name.clone()), None).1;
+                let procedure_type = format!("{} {}", member_name, procedure_type);
+                final_procedure.push_str(&procedure_type[..]);
+            } else {
+                let _member_name = String::from("<unknown>");
+                let procedure_type = extract_type_string(type_finder, argument_list, None, None).1;
+                let procedure_type = format!("{}", procedure_type);//, member_name);
+                final_procedure.push_str(&procedure_type[..]);
+            }
+            // println!("PROCEDURE {}", final_procedure);
+            (crate::TypeData::Modifier,
+                final_procedure)
+        },
+        pdb::TypeData::ArgumentList(pdb::ArgumentList {arguments}) => {
+            let mut final_argument_string = String::from("(");
+            let vec_len_index = arguments.len() - 1;
+            let mut count = 0;
+            for type_index in arguments.into_iter() {
+                let mut type_var = extract_type_string(type_finder, type_index, None, None).1;
+                if count == vec_len_index {
+                    type_var = format!("{}", type_var);
+                } else {
+                    type_var = format!("{}, ", type_var);
+                }
+                
+                final_argument_string.push_str(&type_var[..]);
+                count += 1;
+            }
+            final_argument_string.push_str(")");
+            (crate::TypeData::ArgumentList,
+                final_argument_string)
+        }
+        _type_data =>  {
             // println!("{:#?}", type_data);
             (crate::TypeData::FieldList,
-                String::from(""))
+                String::from("** CANNOT FIND TYPE, PLEASE SUBMIT ISSUE ON GITHUB **"))
         },
     };
     // println!("{:#?}", type_str);
@@ -188,14 +298,14 @@ fn loop_over_fields(py: &Python, type_finder: &TypeFinder, fields: TypeIndex, cu
         pdb::TypeData::FieldList(list) => {
             for field in list.fields {
                 if let pdb::TypeData::Member(member) = field {
-                    println!("");
+                    // println!("");
 
                     let current_name = &member.name.to_string().into_owned()[..];
-                    let (_type_data, mut type_str) = extract_type_string(&type_finder, member.field_type, Some(current_name.to_string()), None);
+                    let (_type_data, type_str) = extract_type_string(&type_finder, member.field_type, Some(current_name.to_string()), None);
                     
                     // println!("{} ({}) - ", member.name.to_string(), member.offset);
-                    println!("Name {} Type {} Offset {:#x}", current_name, type_str, member.offset);
-                    println!("");
+                    // println!("Name {} Type {} Offset {:#x}", current_name, type_str, member.offset);
+                    // println!("");
                     if let Some(type_cast) = current_dict.get_item(member.offset) {
                         let prev_type_string_tuple = type_cast.downcast::<PyTuple>().expect("Bad downcast");
                         // println!("{:#?} ({:#x})", prev_type_string_tuple, member.offset);
@@ -206,12 +316,12 @@ fn loop_over_fields(py: &Python, type_finder: &TypeFinder, fields: TypeIndex, cu
                                                         .expect("Cant downcast pystring").to_string()
                                                         .unwrap().into_owned();
 
-                        let (type_data, mut type_str) = extract_type_string(&type_finder, member.field_type, Some(current_name.to_string()),
+                        let (type_data, type_str) = extract_type_string(&type_finder, member.field_type, Some(current_name.to_string()),
                                                         Some(&prev_type_string[..(prev_type_string.len() - 1)]));
                         
                         let prev_string_length = prev_type_string.len();
 
-                        let mut result_string: String = type_str.clone();
+                        let result_string;
                         let mut cut_index = prev_string_length - 2;
                         if type_data == crate::TypeData::Bitfield {
                             cut_index = 0;
@@ -222,7 +332,7 @@ fn loop_over_fields(py: &Python, type_finder: &TypeFinder, fields: TypeIndex, cu
                         // println!("Field: {}", prev_type_string);
                         // println!("last character: {}", last_character);
                         if last_character == '}' {
-                            if (cut_index > 0) {
+                            if cut_index > 0 {
                                 let prev_type_string = (&prev_type_string[..cut_index]).to_string();
                                 result_string = format!("{}\n{};\n}}", prev_type_string, type_str);
                             } else {
@@ -241,7 +351,7 @@ fn loop_over_fields(py: &Python, type_finder: &TypeFinder, fields: TypeIndex, cu
                     } else {
                         let types = vec![current_name.to_string(), type_str];
                         let types_tuple = PyTuple::new(*py, types);
-                        println!("{:#?} {:#x}", types_tuple, member.offset);
+                        // println!("{:#?} {:#x}", types_tuple, member.offset);
                         current_dict.set_item(member.offset, types_tuple).handle_properly();
                     }
                     
@@ -255,7 +365,7 @@ fn loop_over_fields(py: &Python, type_finder: &TypeFinder, fields: TypeIndex, cu
     ()
 }
 
-fn insert_length_into_dict(py: Python, dict: &PyDict, desired_type: String) -> Result<(), PyErr> {
+fn insert_length_into_dict(_py: Python, dict: &PyDict, desired_type: String) -> Result<(), PyErr> {
     
     let mut pdb = open_pdb_and_parse()?;
 
@@ -288,7 +398,7 @@ fn insert_length_into_dict(py: Python, dict: &PyDict, desired_type: String) -> R
 
         // parse the type record
         match typ.parse() {
-            Ok(pdb::TypeData::Class(pdb::ClassType {name, size, fields: Some(fields), ..})) => {
+            Ok(pdb::TypeData::Class(pdb::ClassType {name, size,  ..})) => {
                 
                 // Make sure we get the desired type
                 if !is_desired_type(&name, &desired_type[..]) {

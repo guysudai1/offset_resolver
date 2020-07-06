@@ -731,7 +731,7 @@ def stringify_dict(struct_name, pdb_dict):
 	count = 0
 	nl = "\n"
 	tab_format = "\t"
-	return f"struct {struct_name} {{ {nl}{'{}'.format(nl).join(['{} {}// {}'.format(y[1], tab_format, hex(x)) for x,y in pdb_dict.items()])} {nl}}}"
+	return f"struct {struct_name} {{ {nl}{'{}'.format(nl).join(['{} {}// {}: 0x{}'.format(y[1], tab_format, str(x).zfill(4), hex(x)[2:].zfill(4)) for x,y in pdb_dict.items()])} {nl}}}"
 
 def automatically_resolve_struct(struct_name):
 	struct_dict = pdb.get_structure(struct_name)
@@ -746,20 +746,23 @@ def automatically_resolve_struct(struct_name):
 	if len((keys := list(struct_dict.keys()))) == 1:
 		return stringify_dict(keys[0], struct_dict[keys[0]]["struct"])	
 
-	"""
+	
 	print(" [++] Found more than 1 object matching the struct name...")
 	print(" [++] I will be printing them and allows you to select the one you want (or none)")
 	for key, val in struct_dict.items():
 		print(f"Struct: {key}")
-		print("Value: ", end="")
-		pprint(val['struct'], sort_dicts=False)
-		print("")
-	"""
-	# print(" [++] Choose struct (if you don't want any of these, don't write anything): ")
+		# print("Value: ", end="")
+		# pprint(val['struct'], sort_dicts=False)
+		# print("")
+	
+	print(" [++] Choose struct (if you don't want any of these, don't write anything): ")
 	choice = input()
 
 	try:
-		return stringify_dict(choice, struct_dict[choice]["struct"])
+		if choice:
+			return stringify_dict(choice, struct_dict[choice]["struct"])
+		else:
+			return None
 	except:
 		return None
 
