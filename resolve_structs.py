@@ -1,13 +1,11 @@
-# from pathlib import Path
-import re
+from pathlib import Path
+import re, os, pefile, struct, argparse, pyastyle, httplib2
 from enum import IntEnum
 from collections import deque, namedtuple
-import pyastyle
-import argparse
-from pprint import pprint
 from os.path import exists
 from ctypes import *
 import pymspdb as pdb
+from time import sleep
 
 class type_enum(IntEnum):
 	"""
@@ -19,49 +17,12 @@ class type_enum(IntEnum):
 	TYPE_STRUCT = 2
 
 
-default_struct = """typedef
-struct
-_DRIVER_OBJECT  { CSHORT             Type; // This should be ignored
-
-  CSHORT             *Size; // so is this
-  PDEVICE_OBJECT     *DeviceObject; /* and so is this */
-  LIST_ENTRY         helloWorld;
-  ULONG              Flags;
-
-  PVOID              DriverStart;
-
-  /* This should be ignored :)  */
-
-  ULONG              DriverSize;
-  /*
-  PVOID thing
-  Ignored thing1
-  */
-  PVOID              *DriverSection;
-
-  union [[fallthrough]] [[noreturn]] {
-	PVOID hello;
-	PVOID* world;
-	union this_is_nice {PVOID helloWorld;
-		INT thisIsNice;};
-	/*
-	INT thisSux;
-	*/
-  };
-  PDRIVER_EXTENSION  DriverExtension;
-  UNICODE_STRING     DriverName;
-
-  PUNICODE_STRING    HardwareDatabase;
-  struct HelloWorld {INT64* cool;
-	union {INT this;
-	};
-	PVOID helloThis;
-  }; PFAST_IO_DISPATCH  FastIoDispatch;PDRIVER_INITIALIZE DriverInit;
-
-  PDRIVER_STARTIO    DriverStartIo;
-  PDRIVER_UNLOAD     DriverUnload;
-  PDRIVER_DISPATCH   MajorFunction[IRP_MJ_MAXIMUM_FUNCTION + 1];
-} DRIVER_OBJECT, *PDRIVER_OBJECT;
+# Insert struct definition here
+# Insert struct definition here
+# Insert struct definition here
+# Insert struct definition here
+# Insert struct definition here
+default_struct = """
 """
 
 # Based on c++ variable naming rules. (not all are used,
@@ -429,7 +390,7 @@ def get_current_file_gen(starting_address):
 	Args:
 		starting_address (Path): start path
 	"""
-	for file_name in starting_address.rglob("*.*"):
+	for file_name in starting_address.rglob("*.pdb"):
 		yield file_name
 
 
@@ -573,25 +534,42 @@ def get_type_length(type_str: str, options={}):
 		type (type_enum): Actual type of the type str
 		options (dictionary): Options that decide the custom properties. 
 	"""
+
 	# Remove CONST from type
 	type_str = type_str.strip().upper()
+	# print(f"Acquiring type for {type_str}...", end="")
 	if type_str.startswith("CONST"):
 		type_str = type_str[len("CONST"):].strip()
 	
 	# Check if type is pointer
-	if type_str[-1] == "*" or type_str.startswith("P") or type_str.startswith("LP"):
-		return 4 if (options.bits == 32) else 8
+	if type_str[-1] == "*" or type_str.startswith("LP"):
+		length = 4 if (options.bits == 32) else 8
 	elif options.bits == 64 and type_str in basic_types_64_bit:
-		return basic_types_64_bit[type_str]
+		length = basic_types_64_bit[type_str]
 	elif options.bits == 32 and type_str in basic_types_32_bit:
-		return basic_types_32_bit[type_str]
+		length = basic_types_32_bit[type_str]
+	elif (type_size := automatically_resolve_struct(type_str, length_type=True)) is not None:
+		length = type_size
 	else:
+		if type_str.startswith("P"):
+			sleep(0.9)
+			print()
+			print(f"[++] Detecting pointer variable? Write Y/Yes if {type_str} is indeed a pointer.")
+			confirmation = input().lower().strip()
+			print(f"Confirmation: {repr(confirmation)}")
+			if confirmation == "y" or confirmation == "yes":
+				length = 4 if (options.bits == 32) else 8	
+				return length
+
 		print(f"Could not find length for type {type_str}. Type 0 if you don't want to insert the length.\nPlease write the length here: ")
 		try:
 			length = int(input())
 		except ValueError:
 			length = 0
 			
+	# if length != 0:
+	# 	print(f"FOUND LENGTH {length}", end="\n")
+
 	return length
 
 
@@ -607,6 +585,7 @@ def get_largest_element_in_union(union, options={}):
 	# Variable to acquire unions / structs (Will work on prettier way, no worries :P)
 	current_index = 0
 	closing_index = -1
+
 	# Max element size
 	max_element = -1
 	for line in middle.split(";"):
@@ -688,6 +667,71 @@ def add_length_to_type(prev_length: int, type_str: str, type: type_enum, options
 		return (f"{type_str}\t// {str(largest_in_union).zfill(4)}: 0x{hex(largest_in_union)[2:].zfill(4)}"), largest_in_union
 	return '**Could not find length**', prev_length
 
+
+def get_guid(path):
+	try:
+		dll = pefile.PE(path)
+		sigs = []
+		for i in range(len(dll.DIRECTORY_ENTRY_DEBUG)):
+			if (dll.DIRECTORY_ENTRY_DEBUG[i].struct.Type == 2):
+				rva = dll.DIRECTORY_ENTRY_DEBUG[i].struct.AddressOfRawData
+				tmp = ''
+				tmp += '%0.*X' % (8, dll.get_dword_at_rva(rva+4))
+				tmp += '%0.*X' % (4, dll.get_word_at_rva(rva+4+4))
+				tmp += '%0.*X' % (4, dll.get_word_at_rva(rva+4+4+2))
+				x = dll.get_word_at_rva(rva+4+4+2+2)
+				tmp += '%0.*X' % (4, struct.unpack('<H',struct.pack('>H',x))[0])
+				x = dll.get_word_at_rva(rva+4+4+2+2+2)
+				tmp += '%0.*X' % (4, struct.unpack('<H',struct.pack('>H',x))[0])
+				x = dll.get_word_at_rva(rva+4+4+2+2+2+2)
+				tmp += '%0.*X' % (4, struct.unpack('<H',struct.pack('>H',x))[0])
+				x = dll.get_word_at_rva(rva+4+4+2+2+2+2+2)
+				tmp += '%0.*X' % (4, struct.unpack('<H',struct.pack('>H',x))[0])
+				tmp += '%0.*X' % (1, dll.get_word_at_rva(rva+4+4+2+2+2+2+2+2))
+
+				sigs.append(tmp)
+		return sigs
+	except AttributeError as e:
+		print('Error appends during %s parsing' % dll_path)
+	
+def download_pdb(guid, dll_name_no_ext):
+	url = "http://msdl.microsoft.com/download/symbols/%s.pdb/%s/%s.pdb" % (dll_name_no_ext, guid, dll_name_no_ext)
+	conn = httplib2.Http()
+	headers = {"User-Agent": "Microsoft-Symbol-Server/6.12.0002.633"}
+	response, content = conn.request(url, "GET", headers=headers)
+
+	if response.status == 200:
+		with open(f"resources/{dll_name_no_ext + '_' + guid}.pdb", 'wb') as pdb_file:
+			pdb_file.write(content)
+		return True
+	else:
+		print(f"Couldn't download {dll_name_no_ext}.pdb!")
+		return False
+
+def pull_pdb_files(dll_file_name: str, bitness: int):
+	print("")
+	for dll in dll_file_name:
+		if bitness == 64:
+			download_from_path = f"c:\\Windows\\System32\\{dll}"
+		else:
+			download_from_path = f"c:\\Windows\\SysWOW64\\{dll}"
+
+		dll_no_ext = dll[:dll.find(".")]
+		# download_cmd = f"symchk.exe /r {download_from_path} /s SRV*{download_to_path}*https://msdl.microsoft.com/download/symbols"
+		guids = get_guid(download_from_path)
+		for guid in guids:
+			download_to_path = Path.cwd() / Path("resources") / Path(dll_no_ext + "_" + guid + ".pdb")
+			print(f"{dll} GUID: {guid}")
+			print("Downloading PDB file, this could take some time. Please hold on...")
+			if exists(download_to_path):
+				print(f"PDB File {download_to_path} already exists, not download again and contiuing...\n")
+				continue
+			if download_pdb(guid, dll_no_ext):
+				print(f"\"{download_from_path}\" => \"{download_to_path}\"")
+			print("")
+
+	print("Finished pulling pdb files.")
+
 def resolve_struct(struct, options={}):
 	"""
 	This function takes a structure and a set of predefined options and returns the structure
@@ -731,39 +775,73 @@ def stringify_dict(struct_name, pdb_dict):
 	count = 0
 	nl = "\n"
 	tab_format = "\t"
-	return f"struct {struct_name} {{ {nl}{'{}'.format(nl).join(['{} {}// {}: 0x{}'.format(y[1], tab_format, str(x).zfill(4), hex(x)[2:].zfill(4)) for x,y in pdb_dict.items()])} {nl}}}"
+	put_only_one_semicolon = lambda x: x.strip(";") + ";"
+	return f"struct {struct_name} {{ {nl}{'{}'.format(nl).join(['{} {}// {}: 0x{}'.format(put_only_one_semicolon(y), tab_format, str(x).zfill(4), hex(x)[2:].zfill(4)) for x,y in pdb_dict.items()])} {nl}}}"
 
-def automatically_resolve_struct(struct_name):
-	struct_dict = pdb.get_structure(struct_name)
+		
+def automatically_resolve_struct(struct_name: str, length_type: bool):
+	dll_list = get_current_file_gen(Path("resources"))
+	struct_dict = {}
+	for dll in dll_list:
+		if length_type:
+			struct_dict = pdb.get_structure_length(struct_name, str(dll), struct_dict)
+		else:
+			struct_dict = pdb.get_structure(struct_name, str(dll), struct_dict)
 
 	if not struct_dict:
-		print(f" [--] Can't find struct with name {struct_name}... Trying {struct_name.strip('_')}")
-		new_name = struct_name.strip("_")
-		struct_dict = pdb.get_structure(new_name)
+		if struct_name.startswith("LP"):
+			new_name = struct_name[2:]
+		elif struct_name.startswith("P"):
+			new_name = struct_name[1:]
+		elif struct_name.startswith("_"):
+			print(f" [--] Can't find struct with name {struct_name}... Trying {struct_name.strip('_')}...", end="")
+			new_name = struct_name.strip("_")
+		else:
+			print(f" [--] Can't find struct with name {struct_name} automatically.")
+			return
+
+		print(f" [--] Can't find struct with name {struct_name}... Trying {new_name}...", end="")
+		dll_list = get_current_file_gen(Path("resources"))
+		struct_dict = {}
+		for dll in dll_list:
+			if length_type:
+				struct_dict = pdb.get_structure_length(struct_name, str(dll), struct_dict)
+			else:
+				struct_dict = pdb.get_structure(struct_name, str(dll), struct_dict)
+
 		if not struct_dict:
+			print()
+			print(" [--] Couldn't find any structs in the PDB files...")
 			return None
+		print("SUCCESS")
 
 	if len((keys := list(struct_dict.keys()))) == 1:
+		if length_type:
+			return struct_dict[keys[0]]	
 		return stringify_dict(keys[0], struct_dict[keys[0]]["struct"])	
 
 	
 	print(" [++] Found more than 1 object matching the struct name...")
 	print(" [++] I will be printing them and allows you to select the one you want (or none)")
+	sleep(1.4)
 	for key, val in struct_dict.items():
-		print(f"Struct: {key}")
-		# print("Value: ", end="")
-		# pprint(val['struct'], sort_dicts=False)
-		# print("")
-	
+		if length_type:
+			print(f" * Struct: {key}, Size: {val}")
+		else:
+			print(f" * Struct: {key}")
+
 	print(" [++] Choose struct (if you don't want any of these, don't write anything): ")
 	choice = input()
 
-	try:
-		if choice:
-			return stringify_dict(choice, struct_dict[choice]["struct"])
+	if choice in struct_dict:
+		if length_type:
+			return struct_dict[choice]
 		else:
-			return None
-	except:
+			return stringify_dict(choice, struct_dict[choice]["struct"])
+	else:
+		print("[==] You did not choose a type value, continuing to manual type resolving...")
+		print("")
+		sleep(1)
 		return None
 
 
@@ -774,11 +852,10 @@ def main():
  	WARNING: Any diseases, body damage, puking, mental issues this source code 
  	WARNING: causes are on your own responsibility. 
 	"""
+
 	# Arguements here
 	# TODO: Add more options
 	# TODO: Add support to read from header files
-	# TODO: Add support to read from microsoft's debugging symbols (pdb files)
-	# TODO: Support more than just the basic types
 	
 	parser = argparse.ArgumentParser(description='This program takes in a gross structure => prettifies it and adds offsets :).')
 	parser.add_argument('--bits', '-B', type=int,
@@ -789,10 +866,21 @@ def main():
 						help="File to get structure from (can also insert structure into top multiline string)")
 	parser.add_argument("--of", type=str, 
 						help="File to write structure from (default is stdout)")
-	parser.add_argument("--unicode", "-U", help="Set this value to support unicode (TCHAR, TBYTE = WCHAR).", action='store_true', default=True)
+	parser.add_argument("--unicode", "-U", help="Set this value to support unicode (TCHAR, TBYTE = WCHAR). Default is true.", action='store_true', default=True)
 	parser.add_argument("--quiet", "-q", help="Set this value to get only the output, no prints.", action='store_true')
+	parser.add_argument('--dlls', '-d', help='A list of DLL files from C:/Windows/System32 separated by a comma', type=str)
 	
+
 	options = parser.parse_args()
+
+	dll_list = "" if options.dlls is None else options.dlls
+	while (dll_list := [item.strip() for item in dll_list.split(',')]) == [""]:
+		print("DLL List is empty, please insert a list of dlls separated by a comma (,):")
+		dll_list = input().strip()
+
+	print(f"Dll list: {dll_list}")
+	pull_pdb_files(dll_list, options.bits)
+
 	options_dict = vars(options)
 	
 	if not options_dict["unicode"]:
@@ -813,7 +901,8 @@ def main():
 		struct = open(struct_file, "r").read()
 		
 	conditional_print("[==] Acquired struct!\n", quiet_mode_set)
- 
+	sleep(0.5)
+
 	# Resolve structure offsets
 	conditional_print("[++] Resolving struct offsets and formatting...", quiet_mode_set)
 
@@ -821,12 +910,12 @@ def main():
 	struct_name = input()
 	conditional_print(" [++] Attempting to automatically get structure...", quiet_mode_set)
 
-	if (returned_struct := automatically_resolve_struct(struct_name)) is None:
-		# print("IT'S NONE!")
+	sleep(0.5)
+	if (returned_struct := automatically_resolve_struct(struct_name, length_type=False)) is None:
 		returned_struct = resolve_struct(struct, options).struct
+
 	conditional_print("[==] Finished calculating offsets and formatting.\n(if there were any errors please submit an issue to my github)\n", quiet_mode_set)
 	
-	# print(returned_struct)
 	formatted = pyastyle.format(returned_struct, '--style=allman')
 	line_max_length = lambda lines: max(len(line[:line.find("//")]) for line in lines.split("\n"))
 	formatted = formatted.expandtabs(line_max_length(formatted) + 4)
