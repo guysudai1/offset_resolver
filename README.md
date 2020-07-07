@@ -18,7 +18,7 @@ Install the required packages:
 ```
 pip install -r requirements.txt
 ```
-Launch the program (Insert struct definition at line *25*):
+Launch the program (Insert struct definition at line *25* or go through the automatic process):
 ```
 python resolve_structs.py
 ```
